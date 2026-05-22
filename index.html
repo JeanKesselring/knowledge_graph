@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knowledge Graph</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #f0ebe3;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+
+  #kg-container {
+    background: #cde8f5;
+    border-radius: 18px;
+    padding: 24px 28px 20px;
+    width: 860px;
+    max-width: 100%;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+    position: relative;
+  }
+
+  #kg-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: #1a1a2e;
+    margin-bottom: 10px;
+    letter-spacing: -0.3px;
+  }
+
+  #kg-svg {
+    width: 100%;
+    height: 560px;
+    display: block;
+    overflow: visible;
+    transform-origin: center center;
+  }
+
+  .kg-edge {
+    stroke: #2a2a2a;
+    stroke-width: 1.8;
+    fill: none;
+    pointer-events: none;
+  }
+
+  .kg-edge-parent {
+    stroke: #2a2a2a;
+    stroke-width: 2.6;
+    fill: none;
+    pointer-events: none;
+  }
+
+  .kg-leaf-edge {
+    stroke: #5a5a5a;
+    stroke-width: 1.1;
+    fill: none;
+    pointer-events: none;
+  }
+
+  .kg-node { cursor: pointer; }
+  .kg-node:hover .kg-node-body { filter: brightness(1.08); }
+  .kg-node-center { cursor: default; }
+
+  .kg-node-parent-link { cursor: pointer; }
+  .kg-node-parent-link:hover .kg-edge-parent { opacity: 0.65; }
+  .kg-node-parent-link:hover .kg-label-parent { opacity: 0.65; }
+
+  .kg-label {
+    font-size: 12px;
+    font-weight: 600;
+    fill: #1a1a2e;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .kg-label-center {
+    font-size: 13px;
+    font-weight: 800;
+    fill: #1a1a2e;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .kg-label-parent {
+    font-size: 12px;
+    font-weight: 500;
+    fill: #333;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .kg-leaf-dot {
+    fill: #4a4a4a;
+    pointer-events: none;
+  }
+
+  .kg-label-bg {
+    fill: rgba(255,255,255,0.75);
+    stroke: none;
+    pointer-events: none;
+  }
+
+  #kg-breadcrumb {
+    font-size: 12px;
+    color: #555;
+    margin-top: 8px;
+    min-height: 18px;
+  }
+  #kg-breadcrumb span {
+    cursor: pointer;
+    color: #2a7ab5;
+    text-decoration: underline;
+  }
+  #kg-breadcrumb span:hover { color: #1a5a8a; }
+</style>
+</head>
+<body>
+<div id="kg-container">
+  <div id="kg-title">Knowledge Graph</div>
+  <svg id="kg-svg" viewBox="0 0 800 520"></svg>
+  <div id="kg-breadcrumb"></div>
+</div>
+
+<script>
+// ─── Constants ────────────────────────────────────────────────────────────────
+const W = 800, H = 520;
+const CX = W / 2, CY = H / 2 - 10;
+
+const CENTER_R   = 56;
+const CHILD_R    = 38;
+const LEAF_R     = 6;
+const CHILD_DIST = 200;
+const LEAF_DIST  = 52;
+const TAIL_LEN   = 32;
+
+const PALETTE    = ['#f08080','#a8d8a8','#f4b06a','#a8c8e8','#d4a8d4','#a8d8c8','#f4d0a0'];
+const PARENT_DIR = Math.PI / 2; // downward in screen coords (y increases downward)
+
+// ─── Data ─────────────────────────────────────────────────────────────────────
+let nodeMap      = {};  // index → topic
+let childrenMap  = {};  // index → [child indices]
+let branchColor  = {};  // index → hex color
+let graphTitle   = '';
+let rootIndex    = -1;
+let history      = [];
+
+function seededRandom(seed) {
+  const s = (seed * 9301 + 49297) % 233280;
+  return s / 233280;
+}
+
+const fmt = n => n.toFixed(2);
+
+// ─── Graph loading ────────────────────────────────────────────────────────────
+async function loadGraph() {
+  const data = await (await fetch('./graph.json')).json();
+  graphTitle = data['Lecture Title'] || 'Root';
+
+  data.topics.forEach(t => { nodeMap[t.index] = t; childrenMap[t.index] = []; });
+  data.topics.forEach(t => t.parents.forEach(p => {
+    if (childrenMap[p] !== undefined) childrenMap[p].push(t.index);
+  }));
+
+  const root = data.topics.find(t => t.parents.length === 0);
+  rootIndex = root ? root.index : data.topics[0].index;
+
+  // Assign palette colors by top-level branch and propagate to descendants
+  (childrenMap[rootIndex] || []).forEach((ci, i) => {
+    const color = PALETTE[i % PALETTE.length];
+    const paint = idx => {
+      branchColor[idx] = color;
+      (childrenMap[idx] || []).forEach(paint);
+    };
+    paint(ci);
+  });
+  branchColor[rootIndex] = '#e87878';
+
+  navigateTo(rootIndex, true);
+}
+
+// ─── Animation ────────────────────────────────────────────────────────────────
+let _busy = false;
+
+function withTransition(fn) {
+  if (_busy) { fn(); return; }
+  _busy = true;
+  const svg = document.getElementById('kg-svg');
+  svg.style.transition = 'opacity 0.12s ease, transform 0.12s ease';
+  svg.style.opacity    = '0';
+  svg.style.transform  = 'scale(0.96)';
+  setTimeout(() => {
+    fn();
+    svg.style.transition = 'opacity 0.22s ease, transform 0.22s ease';
+    svg.style.opacity    = '1';
+    svg.style.transform  = 'scale(1)';
+    setTimeout(() => { _busy = false; }, 240);
+  }, 130);
+}
+
+// ─── Navigation ───────────────────────────────────────────────────────────────
+function navigateTo(idx, pushHistory = true) {
+  const go = () => {
+    if (pushHistory && (history.length === 0 || history[history.length - 1] !== idx))
+      history.push(idx);
+    renderView(idx);
+    renderBreadcrumb();
+  };
+  if (pushHistory) withTransition(go); else go();
+}
+
+function navigateToParent(parentIdx) {
+  withTransition(() => {
+    if (history.length >= 2 && history[history.length - 2] === parentIdx) {
+      history.pop();
+    } else {
+      const pos = history.indexOf(parentIdx);
+      history = pos >= 0 ? history.slice(0, pos + 1) : [...history, parentIdx];
+    }
+    renderView(parentIdx);
+    renderBreadcrumb();
+  });
+}
+
+function renderBreadcrumb() {
+  const el = document.getElementById('kg-breadcrumb');
+  if (history.length <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = history.map((idx, i) => {
+    const label = nodeMap[idx] ? nodeMap[idx].title : graphTitle;
+    return i === history.length - 1
+      ? `<strong>${label}</strong>`
+      : `<span data-idx="${idx}">${label}</span>`;
+  }).join(' › ');
+  el.querySelectorAll('span[data-idx]').forEach(s =>
+    s.addEventListener('click', () => {
+      const pos = history.indexOf(+s.dataset.idx);
+      if (pos < 0) return;
+      withTransition(() => {
+        history = history.slice(0, pos + 1);
+        renderView(history[history.length - 1]);
+        renderBreadcrumb();
+      });
+    })
+  );
+}
+
+// ─── Layout ───────────────────────────────────────────────────────────────────
+function childAngles(count, parentAngle) {
+  if (count === 0) return [];
+  // 90° gap centred on parentAngle; children spread through the remaining 270°
+  const gapHalf  = Math.PI / 4;           // 45° each side → 90° total gap
+  const arcStart = parentAngle + gapHalf;
+  const totalArc = 2 * Math.PI - 2 * gapHalf; // 270°
+  const step     = totalArc / (count + 1);
+
+  return Array.from({ length: count }, (_, i) => {
+    const base   = arcStart + step * (i + 1);
+    const jitter = (seededRandom(i * 17 + count * 3) - 0.5) * 0.70; // ±20°
+    return base + jitter;
+  });
+}
+
+// ─── SVG helpers ─────────────────────────────────────────────────────────────
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs = {}, text = '') {
+  const e = document.createElementNS(SVG_NS, tag);
+  Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+  if (text) e.textContent = text;
+  return e;
+}
+
+// ─── Teardrop path ────────────────────────────────────────────────────────────
+// Body = large clockwise SVG arc (p2 → p1).
+// Tail = two quadratic Bézier curves (p1→tip, tip→p2) sharing a control point
+// along the tail axis just inside the circle edge. This pulls both sides
+// inward, creating smooth curved sides that taper to a sharp tip.
+function tearDropPath(cx, cy, r, tailAngle, tailLen) {
+  const cutout = Math.PI / 6; // 30° each side — wide enough to blend smoothly
+
+  const p1a = tailAngle - cutout, p2a = tailAngle + cutout;
+  const p1x = cx + Math.cos(p1a) * r, p1y = cy + Math.sin(p1a) * r;
+  const p2x = cx + Math.cos(p2a) * r, p2y = cy + Math.sin(p2a) * r;
+  const tx  = cx + Math.cos(tailAngle) * (r + tailLen);
+  const ty  = cy + Math.sin(tailAngle) * (r + tailLen);
+
+  // Control point along the tail axis, at 85 % of r from centre.
+  // Both Q curves pull toward this point → concave sides, sharp tip.
+  const cpx = cx + Math.cos(tailAngle) * (r * 0.85);
+  const cpy = cy + Math.sin(tailAngle) * (r * 0.85);
+
+  return [
+    `M ${fmt(p2x)} ${fmt(p2y)}`,
+    `A ${r} ${r} 0 1 1 ${fmt(p1x)} ${fmt(p1y)}`,
+    `Q ${fmt(cpx)} ${fmt(cpy)}, ${fmt(tx)} ${fmt(ty)}`,
+    `Q ${fmt(cpx)} ${fmt(cpy)}, ${fmt(p2x)} ${fmt(p2y)}`,
+    'Z'
+  ].join(' ');
+}
+
+// ─── Color helpers ────────────────────────────────────────────────────────────
+function colorVariants(hex) { return { fill: hex, stroke: shade(hex, -25) }; }
+
+function shade(hex, d) {
+  return '#' + [1,3,5].map(i =>
+    Math.max(0, Math.min(255, parseInt(hex.slice(i, i+2), 16) + d))
+      .toString(16).padStart(2, '0')
+  ).join('');
+}
+
+// ─── Label helpers ────────────────────────────────────────────────────────────
+function wrapWords(title, maxChars, maxLines) {
+  const words = title.split(' ');
+  const lines = []; let cur = '';
+  for (const w of words) {
+    const next = cur ? cur + ' ' + w : w;
+    if (cur && next.length > maxChars) { lines.push(cur); cur = w; }
+    else cur = next;
+  }
+  if (cur) lines.push(cur);
+  return lines.slice(0, maxLines);
+}
+
+// Draw the centre-node label: wrapped text, vertically centred inside the circle
+function drawCenterLabel(g, title) {
+  const lines  = wrapWords(title, 11, 3);
+  const lineH  = 15;
+  // Shift the block upward so tail doesn't intrude
+  const midY   = CY - CENTER_R * 0.18;
+  const startY = midY - ((lines.length - 1) * lineH) / 2;
+
+  const tg = el('text', { 'text-anchor': 'middle', class: 'kg-label-center' });
+  lines.forEach((line, li) => {
+    // y = baseline position; add ~0.35 * lineH so visual centre aligns with startY
+    tg.appendChild(el('tspan', {
+      x: CX,
+      y: (startY + li * lineH + lineH * 0.36).toFixed(1)
+    }, line));
+  });
+  g.appendChild(tg);
+}
+
+// Draw an outer child label: white box + wrapped text, positioned radially outward
+function drawChildLabel(g, title, nodeCx, nodeCy, angle) {
+  const lines   = wrapWords(title, 10, 2);
+  const lineH   = 14;
+  const padX    = 7, padY = 4;
+  const charW   = 6.6;
+  const boxW    = Math.max(46, Math.max(...lines.map(l => l.length)) * charW + padX * 2);
+  const boxH    = lines.length * lineH + padY * 2;
+
+  // Place box so its nearest face is ~12 px outside the node circle edge.
+  // Projected extent of the axis-aligned box along direction (cosA, sinA):
+  const cosA = Math.cos(angle), sinA = Math.sin(angle);
+  const proj  = Math.abs(cosA) * boxW / 2 + Math.abs(sinA) * boxH / 2;
+  const dist  = CHILD_R + 12 + proj;
+  const bx    = nodeCx + cosA * dist;
+  const by    = nodeCy + sinA * dist;
+
+  g.appendChild(el('rect', {
+    x: (bx - boxW / 2).toFixed(1), y: (by - boxH / 2).toFixed(1),
+    width: boxW.toFixed(1), height: boxH.toFixed(1),
+    rx: 5, ry: 5, class: 'kg-label-bg'
+  }));
+
+  const tg = el('text', { 'text-anchor': 'middle', class: 'kg-label' });
+  const startY = by - ((lines.length - 1) * lineH) / 2;
+  lines.forEach((line, li) => {
+    tg.appendChild(el('tspan', {
+      x: bx.toFixed(1),
+      y: (startY + li * lineH + lineH * 0.36).toFixed(1)
+    }, line));
+  });
+  g.appendChild(tg);
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function renderView(idx) {
+  const svg      = document.getElementById('kg-svg');
+  svg.innerHTML  = '';
+
+  const node     = nodeMap[idx];
+  const children = childrenMap[idx] || [];
+  const parentIdx = node.parents.length > 0 ? node.parents[0] : null;
+  const isRoot   = idx === rootIndex;
+  const cv       = colorVariants(branchColor[idx] || '#e87878');
+
+  // ── Parent link ──────────────────────────────────────────────────────────
+  const parentLabel    = isRoot ? graphTitle : (parentIdx !== null ? nodeMap[parentIdx].title : '');
+  const canNavParent   = !isRoot && parentIdx !== null;
+
+  {
+    const lineStart = CENTER_R + TAIL_LEN;
+    const lineEnd   = lineStart + 80;
+    const psx = CX + Math.cos(PARENT_DIR) * lineStart;
+    const psy = CY + Math.sin(PARENT_DIR) * lineStart;
+    const pex = CX + Math.cos(PARENT_DIR) * lineEnd;
+    const pey = CY + Math.sin(PARENT_DIR) * lineEnd;
+
+    const g = el('g', { class: canNavParent ? 'kg-node-parent-link' : '' });
+    if (!canNavParent) g.style.cursor = 'default';
+
+    g.appendChild(el('line', { x1: psx, y1: psy, x2: pex, y2: pey, class: 'kg-edge-parent' }));
+    g.appendChild(el('text', {
+      x: pex, y: pey + 17, class: 'kg-label-parent', 'text-anchor': 'middle'
+    }, parentLabel));
+
+    // Transparent hit rectangle so the whole area is clickable
+    const hx = Math.min(psx, pex) - 18, hy = Math.min(psy, pey) - 6;
+    const hw = Math.abs(pex - psx) + 36, hh = Math.abs(pey - psy) + 34;
+    g.appendChild(el('rect', { x: hx, y: hy, width: hw, height: hh,
+      fill: 'transparent', 'pointer-events': 'all' }));
+
+    if (canNavParent) g.addEventListener('click', () => navigateToParent(parentIdx));
+    svg.appendChild(g);
+  }
+
+  // ── Child nodes ──────────────────────────────────────────────────────────
+  const angles = childAngles(children.length, PARENT_DIR);
+
+  children.forEach((childIdx, i) => {
+    const angle = angles[i];
+    // Varied distance: 65 %–135 % of CHILD_DIST, seeded per node for stability
+    const dist  = CHILD_DIST * (0.65 + seededRandom(childIdx * 31 + 7) * 0.70);
+    const cx    = CX + Math.cos(angle) * dist;
+    const cy    = CY + Math.sin(angle) * dist;
+
+    const grand    = childrenMap[childIdx] || [];
+    const ccv      = colorVariants(branchColor[childIdx] || PALETTE[i % PALETTE.length]);
+
+    // Centre → child edge
+    svg.appendChild(el('line', { x1: CX, y1: CY, x2: cx, y2: cy, class: 'kg-edge' }));
+
+    // Leaf dots in a full ring around child
+    const leaves     = grand.length > 0 ? grand : (nodeMap[childIdx].keywords || []);
+    const leafAngles = Array.from({ length: leaves.length }, (_, li) =>
+      angle + (li / leaves.length) * 2 * Math.PI
+    );
+    leafAngles.forEach(la => {
+      const lx = cx + Math.cos(la) * LEAF_DIST, ly = cy + Math.sin(la) * LEAF_DIST;
+      svg.appendChild(el('line', { x1: cx, y1: cy, x2: lx, y2: ly, class: 'kg-leaf-edge' }));
+      svg.appendChild(el('circle', { cx: lx, cy: ly, r: LEAF_R, class: 'kg-leaf-dot' }));
+    });
+
+    // Child teardrop (tail toward centre)
+    const g = el('g', { class: 'kg-node', 'data-idx': childIdx });
+    g.appendChild(el('path', {
+      d: tearDropPath(cx, cy, CHILD_R, angle + Math.PI, TAIL_LEN * 0.75),
+      fill: ccv.fill, stroke: ccv.stroke, 'stroke-width': '1.5', class: 'kg-node-body'
+    }));
+
+    drawChildLabel(g, nodeMap[childIdx].title, cx, cy, angle);
+
+    g.addEventListener('click', () => navigateTo(childIdx));
+    svg.appendChild(g);
+  });
+
+  // ── Centre node ──────────────────────────────────────────────────────────
+  const cg = el('g', { class: 'kg-node-center' });
+  cg.appendChild(el('path', {
+    d: tearDropPath(CX, CY, CENTER_R, PARENT_DIR, TAIL_LEN),
+    fill: cv.fill, stroke: cv.stroke, 'stroke-width': '2', class: 'kg-node-body'
+  }));
+  drawCenterLabel(cg, node.title);
+  svg.appendChild(cg);
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+loadGraph();
+</script>
+</body>
+</html>

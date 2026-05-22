@@ -1,0 +1,193 @@
+{
+  "Lecture Title": "Estimating and testing proportions",
+  "topics": [
+    {
+      "index": 0,
+      "title": "Binomial Distribution",
+      "summary": "A discrete probability distribution representing the number of successes in a fixed number of independent Bernoulli trials.",
+      "keywords": [
+        "Binomial",
+        "Bernoulli",
+        "Successes",
+        "n",
+        "p"
+      ],
+      "parents": []
+    },
+    {
+      "index": 1,
+      "title": "Point Estimation for Proportions",
+      "summary": "The process of finding a single value (estimate) or a rule (estimator) to represent the true population proportion p.",
+      "keywords": [
+        "Estimator",
+        "Estimate",
+        "p-hat",
+        "Sample Proportion"
+      ],
+      "parents": [
+        0
+      ]
+    },
+    {
+      "index": 2,
+      "title": "Method of Moments (MM)",
+      "summary": "An estimation technique that equates the sample mean to the theoretical expected value of the distribution to solve for parameters.",
+      "keywords": [
+        "Method of Moments",
+        "Expected Value",
+        "First Moment"
+      ],
+      "parents": [
+        1
+      ]
+    },
+    {
+      "index": 3,
+      "title": "Maximum Likelihood Estimation (MLE)",
+      "summary": "A method of estimating parameters by maximizing the likelihood function, often using the log-likelihood for mathematical simplicity.",
+      "keywords": [
+        "Likelihood",
+        "Log-likelihood",
+        "Derivative",
+        "MLE"
+      ],
+      "parents": [
+        1
+      ]
+    },
+    {
+      "index": 4,
+      "title": "Confidence Intervals for Proportions",
+      "summary": "Statistical ranges used to estimate the true population proportion with a specific level of confidence.",
+      "keywords": [
+        "Confidence Interval",
+        "CI",
+        "Lower Bound",
+        "Upper Bound"
+      ],
+      "parents": [
+        0
+      ]
+    },
+    {
+      "index": 5,
+      "title": "Wald Confidence Interval",
+      "summary": "A confidence interval based on the Gaussian (Normal) approximation of the binomial distribution, typically using the standard error.",
+      "keywords": [
+        "Wald CI",
+        "Normal Approximation",
+        "Standard Error",
+        "Z-score"
+      ],
+      "parents": [
+        4
+      ]
+    },
+    {
+      "index": 6,
+      "title": "Wilson Score Interval",
+      "summary": "An alternative confidence interval for proportions that provides better coverage than the Wald interval, especially for small samples or extreme proportions.",
+      "keywords": [
+        "Wilson CI",
+        "Quadratic Equation",
+        "Coverage Probability"
+      ],
+      "parents": [
+        4
+      ]
+    },
+    {
+      "index": 7,
+      "title": "Exact Confidence Interval",
+      "summary": "A confidence interval derived directly from the binomial distribution (e.g., Clopper-Pearson) rather than a normal approximation.",
+      "keywords": [
+        "binom.test",
+        "Exact CI",
+        "Discrete Distribution"
+      ],
+      "parents": [
+        4
+      ]
+    },
+    {
+      "index": 8,
+      "title": "Hypothesis Testing for Proportions",
+      "summary": "Statistical procedures used to test claims about a single proportion or the difference between two proportions.",
+      "keywords": [
+        "Null Hypothesis",
+        "Alternative Hypothesis",
+        "p-value",
+        "prop.test"
+      ],
+      "parents": [
+        0
+      ]
+    },
+    {
+      "index": 9,
+      "title": "Chi-squared Test of Independence",
+      "summary": "A test used to determine if there is a significant association between two categorical variables in a contingency table.",
+      "keywords": [
+        "Chi-squared",
+        "Contingency Table",
+        "Expected Frequencies",
+        "Degrees of Freedom"
+      ],
+      "parents": [
+        8
+      ]
+    },
+    {
+      "index": 10,
+      "title": "Fisher's Exact Test",
+      "summary": "A statistical significance test used in the analysis of contingency tables, particularly useful for small sample sizes where Chi-squared assumptions fail.",
+      "keywords": [
+        "Fisher's Exact",
+        "Small Samples",
+        "2x2 Table"
+      ],
+      "parents": [
+        8
+      ]
+    },
+    {
+      "index": 11,
+      "title": "Continuity Correction",
+      "summary": "An adjustment applied when a continuous distribution (like the Normal) is used to approximate a discrete distribution (like the Binomial).",
+      "keywords": [
+        "Continuity Correction",
+        "Yates Correction",
+        "Approximation"
+      ],
+      "parents": [
+        0
+      ]
+    },
+    {
+      "index": 12,
+      "title": "Relative Risk (RR)",
+      "summary": "The ratio of the probability of an outcome in an exposed group to the probability of an outcome in an unexposed group.",
+      "keywords": [
+        "Relative Risk",
+        "Risk Ratio",
+        "Epidemiology"
+      ],
+      "parents": [
+        8
+      ]
+    },
+    {
+      "index": 13,
+      "title": "Odds Ratio (OR)",
+      "summary": "A measure of association between an exposure and an outcome, representing the odds that an outcome will occur given a particular exposure compared to the odds in the absence of that exposure.",
+      "keywords": [
+        "Odds Ratio",
+        "Odds",
+        "Association"
+      ],
+      "parents": [
+        8
+      ]
+    }
+  ]
+}
