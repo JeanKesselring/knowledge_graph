@@ -1,464 +1,461 @@
-'use client';
+"use client";
 
-import { useCallback, useMemo, useState } from 'react';
+import { useEffect, useMemo } from "react";
+import {
+  animate,
+  motion,
+  motionValue,
+  useTransform,
+  type MotionValue,
+} from "framer-motion";
+import type { GraphData } from "@/lib/types";
+import { DEPTH_SCALE } from "@/lib/graph";
+import { teardropPath } from "@/lib/teardrop";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-interface Topic {
-  index: number;
-  title: string;
-  summary: string;
-  keywords: string[];
-  parents: number[];
-}
+const VIEW_W = 1100;
+const VIEW_H = 720;
 
-export interface GraphData {
-  'Lecture Title': string;
-  topics: Topic[];
-}
+const SIZE_FOCUS = 60;
+const SIZE_CHILD = 20;
+const SIZE_GRANDCHILD = 3;
 
-// ── Constants ──────────────────────────────────────────────────────────────────
-const W = 800, H = 520;
-const CX = W / 2, CY = H / 2 + 10;
-const CENTER_R = 56;
-const CHILD_R = 38;
-const LEAF_R = 5.5;
-const CHILD_DIST = 165;
-const LEAF_DIST = 110;
-const TAIL_LEN = 36;
-const CHILD_TAIL_FACTOR = 0.88;
-const PARENT_DIR = Math.PI / 2; // gap direction (toward parent = downward)
-const STROKE = '#333';
-const PALETTE = ['#f08080', '#a8d8a8', '#f4b06a', '#a8c8e8', '#d4a8d4', '#a8d8c8', '#f4d0a0'];
-const ANIM_MS = 600;
-const ZOOM_ROOT = 1.0;   // zoom level when at root
-const ZOOM_DEEP = 1.3;   // zoom level when at any non-root node
+const STROKE_SUPER = 3;
+const STROKE_CHILD = 1.5;
+const STROKE_GRANDCHILD = 0.75;
 
-// ── Pure utilities ─────────────────────────────────────────────────────────────
-function seededRandom(seed: number): number {
-  return ((seed * 9301 + 49297) % 233280) / 233280;
-}
+const TRANSITION = {
+  type: "spring" as const,
+  stiffness: 70,
+  damping: 18,
+  mass: 0.9,
+};
 
-function wrapWords(title: string, maxChars: number, maxLines: number): string[] {
-  const words = title.split(' ');
-  const lines: string[] = [];
-  let cur = '';
-  for (const w of words) {
-    const next = cur ? `${cur} ${w}` : w;
-    if (cur && next.length > maxChars) { lines.push(cur); cur = w; }
-    else cur = next;
+const TEARDROP_UNIT = teardropPath(1);
+
+type Role = "focus" | "super" | "child" | "grandchild" | "hidden";
+type MV = { x: MotionValue<number>; y: MotionValue<number> };
+
+function roleFor(nodeId: string, focusId: string, graph: GraphData): Role {
+  if (nodeId === focusId) return "focus";
+  const focus = graph.nodes[focusId];
+  if (focus.parentId === nodeId) return "super";
+  const node = graph.nodes[nodeId];
+  if (!node) return "hidden";
+  if (node.parentId === focusId) return "child";
+  if (node.parentId && graph.nodes[node.parentId]?.parentId === focusId) {
+    return "grandchild";
   }
-  if (cur) lines.push(cur);
-  return lines.slice(0, maxLines);
+  return "hidden";
 }
 
-function childAngles(count: number, parentAngle: number): number[] {
-  if (!count) return [];
-  const gapHalf = Math.PI / 4;
-  const arcStart = parentAngle + gapHalf;
-  const totalArc = 2 * Math.PI - 2 * gapHalf;
-  const step = totalArc / (count + 1);
-  return Array.from({ length: count }, (_, i) => {
-    const base = arcStart + step * (i + 1);
-    const jitter = (seededRandom(i * 17 + count * 3) - 0.5) * 0.7;
-    return base + jitter;
-  });
-}
+export type HoverInfo = { id: string; clientX: number; clientY: number };
 
-function leafAngles(count: number, parentInwardAngle: number): number[] {
-  if (!count) return [];
-  const gapHalf = Math.PI / 4;
-  const arcStart = parentInwardAngle + gapHalf;
-  const totalArc = 2 * Math.PI - 2 * gapHalf;
-  const step = totalArc / count;
-  return Array.from({ length: count }, (_, i) => arcStart + step * i + step / 2);
-}
-
-function tailPath(cx: number, cy: number, r: number, tailAngle: number, tailLen: number): string {
-  const cutout = Math.PI / 6;
-  const p1a = tailAngle - cutout, p2a = tailAngle + cutout;
-  const p1x = cx + Math.cos(p1a) * r, p1y = cy + Math.sin(p1a) * r;
-  const p2x = cx + Math.cos(p2a) * r, p2y = cy + Math.sin(p2a) * r;
-  const tx = cx + Math.cos(tailAngle) * (r + tailLen);
-  const ty = cy + Math.sin(tailAngle) * (r + tailLen);
-  const t = tailLen * 0.55, s = tailLen * 0.32;
-  const c1x = p1x + (-Math.sin(p1a)) * t, c1y = p1y + Math.cos(p1a) * t;
-  const c2x = tx - Math.cos(tailAngle) * s, c2y = ty - Math.sin(tailAngle) * s;
-  const c3x = c2x, c3y = c2y;
-  const c4x = p2x + Math.sin(p2a) * t, c4y = p2y - Math.cos(p2a) * t;
-  const f = (n: number) => n.toFixed(2);
-  return [
-    `M ${f(p1x)} ${f(p1y)}`,
-    `C ${f(c1x)} ${f(c1y)}, ${f(c2x)} ${f(c2y)}, ${f(tx)} ${f(ty)}`,
-    `C ${f(c3x)} ${f(c3y)}, ${f(c4x)} ${f(c4y)}, ${f(p2x)} ${f(p2y)}`,
-    'Z',
-  ].join(' ');
-}
-
-// ── Graph builder ──────────────────────────────────────────────────────────────
-function buildGraph(data: GraphData) {
-  const nodeMap: Record<number, Topic> = {};
-  const childrenMap: Record<number, number[]> = {};
-  const parentMap: Record<number, number[]> = {};
-  const branchColor: Record<number, string> = {};
-
-  data.topics.forEach(t => {
-    nodeMap[t.index] = t;
-    childrenMap[t.index] = [];
-    parentMap[t.index] = [];
-  });
-  data.topics.forEach(t => t.parents.forEach(p => {
-    if (p in childrenMap) childrenMap[p].push(t.index);
-    if (t.index in parentMap) parentMap[t.index].push(p);
-  }));
-
-  const root = data.topics.find(t => t.parents.length === 0) ?? data.topics[0];
-  (childrenMap[root.index] ?? []).forEach((ci, i) => {
-    const color = PALETTE[i % PALETTE.length];
-    const paint = (idx: number) => { branchColor[idx] = color; (childrenMap[idx] ?? []).forEach(paint); };
-    paint(ci);
-  });
-  branchColor[root.index] = '#e87878';
-
-  return { nodeMap, childrenMap, parentMap, branchColor, rootIndex: root.index };
-}
-
-// ── Fixed layout ───────────────────────────────────────────────────────────────
-// All positions and angles are computed ONCE and never change. Navigation moves
-// the camera, not the nodes. This eliminates all positional/rotational snapping.
-interface FixedNode {
-  idx: number;
-  cx: number;
-  cy: number;
-  parentIdx: number | null;
-  tailAngle: number;                       // fixed: direction from this node toward its parent
-  kwDots: Array<{ x: number; y: number }>; // fixed: keyword dot positions (leaf topic nodes only)
-}
-
-function buildFixedLayout(
-  rootIndex: number,
-  childrenMap: Record<number, number[]>,
-  nodeMap: Record<number, Topic>,
-): Record<number, FixedNode> {
-  const layout: Record<number, FixedNode> = {};
-
-  function place(idx: number, cx: number, cy: number, tailAngle: number, parentIdx: number | null) {
-    const hasChildren = (childrenMap[idx] ?? []).length > 0;
-    const keywords = nodeMap[idx]?.keywords ?? [];
-    // Pre-compute keyword dot positions for leaf nodes — fixed forever
-    const kwDots: Array<{ x: number; y: number }> = (!hasChildren && keywords.length > 0)
-      ? leafAngles(keywords.length, tailAngle).map(a => ({
-          x: cx + Math.cos(a) * LEAF_DIST,
-          y: cy + Math.sin(a) * LEAF_DIST,
-        }))
-      : [];
-
-    layout[idx] = { idx, cx, cy, parentIdx, tailAngle, kwDots };
-
-    const children = childrenMap[idx] ?? [];
-    const angles = childAngles(children.length, tailAngle);
-    children.forEach((childIdx, i) => {
-      const dist = CHILD_DIST * (0.78 + seededRandom(childIdx * 31 + 7) * 0.35);
-      const childCx = cx + Math.cos(angles[i]) * dist;
-      const childCy = cy + Math.sin(angles[i]) * dist;
-      // Child's tail points back toward this parent node — fixed forever
-      const childTailAngle = Math.atan2(cy - childCy, cx - childCx);
-      place(childIdx, childCx, childCy, childTailAngle, idx);
-    });
-  }
-
-  place(rootIndex, CX, CY, PARENT_DIR, null);
-  return layout;
-}
-
-// ── Graph distances (BFS, bidirectional) ───────────────────────────────────────
-function getDistances(
-  fromIdx: number,
-  childrenMap: Record<number, number[]>,
-  parentMap: Record<number, number[]>,
-): Record<number, number> {
-  const dist: Record<number, number> = {};
-  const queue: [number, number][] = [[fromIdx, 0]];
-  while (queue.length) {
-    const [idx, d] = queue.shift()!;
-    if (idx in dist) continue;
-    dist[idx] = d;
-    (childrenMap[idx] ?? []).forEach(c => queue.push([c, d + 1]));
-    (parentMap[idx] ?? []).forEach(p => queue.push([p, d + 1]));
-  }
-  return dist;
-}
-
-// ── KnowledgeGraph ─────────────────────────────────────────────────────────────
-export function KnowledgeGraph({ data }: { data: GraphData }) {
-  const { nodeMap, childrenMap, parentMap, branchColor, rootIndex } = useMemo(() => buildGraph(data), [data]);
-  const graphTitle = data['Lecture Title'];
-
-  // Fixed layout: computed once, positions and angles never change
-  const fixedLayout = useMemo(
-    () => buildFixedLayout(rootIndex, childrenMap, nodeMap),
-    [rootIndex, childrenMap, nodeMap],
-  );
-  // Stable idx order: DOM elements never reorder, preserving CSS transition state
-  const allNodes = useMemo(
-    () => Object.values(fixedLayout).sort((a, b) => a.idx - b.idx),
-    [fixedLayout],
-  );
-
-  const [currentIdx, setCurrentIdx] = useState(rootIndex);
-  const [history, setHistory] = useState<number[]>([rootIndex]);
-
-  const navigate = useCallback((idx: number) => {
-    setCurrentIdx(idx);
-    setHistory(h => {
-      const pos = h.indexOf(idx);
-      return pos >= 0 ? h.slice(0, pos + 1) : [...h, idx];
-    });
-  }, []);
-
-  // Camera: translate + scale. The wrapper <g> moves so the focused node appears at (CX, CY).
-  // Zoom is deeper for non-root nodes, giving a "zoom in" feel on first navigation.
-  const camera = fixedLayout[currentIdx];
-  const zoomScale = currentIdx === rootIndex ? ZOOM_ROOT : ZOOM_DEEP;
-  const tx = CX - camera.cx * zoomScale;
-  const ty = CY - camera.cy * zoomScale;
-
-  const distances = useMemo(
-    () => getDistances(currentIdx, childrenMap, parentMap),
-    [currentIdx, childrenMap, parentMap],
-  );
-
-  const rForDist = (d: number): number =>
-    d === 0 ? CENTER_R : d === 1 ? CHILD_R : d === 2 ? LEAF_R : 0;
-
-  const isRoot = currentIdx === rootIndex;
-  const currentNode = nodeMap[currentIdx];
-  const parentIdx = currentNode.parents[0] ?? null;
-  const canNavParent = !isRoot && parentIdx !== null;
-  const parentLabel = isRoot ? graphTitle : (parentIdx !== null ? nodeMap[parentIdx]?.title ?? '' : '');
-
-  // Parent link geometry — anchored to camera (focused node) in world space
-  const linkStart = CENTER_R + TAIL_LEN + 2;
-  const linkEnd = linkStart + 72;
-  const plx1 = camera.cx + Math.cos(PARENT_DIR) * linkStart;
-  const ply1 = camera.cy + Math.sin(PARENT_DIR) * linkStart;
-  const plx2 = camera.cx + Math.cos(PARENT_DIR) * linkEnd;
-  const ply2 = camera.cy + Math.sin(PARENT_DIR) * linkEnd;
-
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-[#f0ebe3] p-5">
-      <div
-        className="relative bg-[#cde8f5] rounded-[18px] px-7 pt-6 pb-5 shadow-[0_2px_16px_rgba(0,0,0,0.08)]"
-        style={{ width: 860, maxWidth: '100%' }}
-      >
-        <div className="text-[22px] font-extrabold text-[#1a1a2e] mb-2 tracking-tight">
-          Knowledge Graph
-        </div>
-
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          className="w-full block overflow-visible"
-          style={{ height: 560 }}
-        >
-          {/* ── Camera wrapper ────────────────────────────────────────────────────
-              translate: moves so focused node appears at screen center (CX, CY)
-              scale: zoom level — deeper nodes zoom in relative to root
-              transformOrigin '0 0': scale happens around SVG origin (correct math)
-              Text sizes inside use /zoomScale to appear at constant screen size. */}
-          <g style={{
-            transform: `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) scale(${zoomScale})`,
-            transition: `transform ${ANIM_MS}ms ease`,
-            transformOrigin: '0 0',
-          }}>
-
-            {/* ── Parent link ───────────────────────────────────────────────── */}
-            <g
-              onClick={canNavParent ? () => navigate(parentIdx!) : undefined}
-              style={{ cursor: canNavParent ? 'pointer' : 'default' }}
-              className={canNavParent ? 'group' : ''}
-            >
-              <line
-                x1={plx1} y1={ply1} x2={plx2} y2={ply2}
-                stroke={STROKE} strokeWidth={2.6}
-                className={canNavParent ? 'transition-opacity group-hover:opacity-55' : ''}
-              />
-              <text
-                x={plx2} y={ply2 + 17 / zoomScale} textAnchor="middle"
-                fontSize={12 / zoomScale} fontWeight={500} fill="#333"
-                style={{ pointerEvents: 'none', userSelect: 'none' }}
-                className={canNavParent ? 'transition-opacity group-hover:opacity-55' : ''}
-              >{parentLabel}</text>
-              <rect
-                x={Math.min(plx1, plx2) - 22} y={Math.min(ply1, ply2) - 8}
-                width={Math.abs(plx2 - plx1) + 44} height={Math.abs(ply2 - ply1) + 38}
-                fill="transparent" style={{ pointerEvents: 'all' }}
-              />
-            </g>
-
-            {/* ── Edges ─────────────────────────────────────────────────────── */}
-            {allNodes.map(n => {
-              if (n.parentIdx === null) return null;
-              const dN = distances[n.idx] ?? 99;
-              const dP = distances[n.parentIdx] ?? 99;
-              if (Math.min(dN, dP) > 2) return null;
-              const par = fixedLayout[n.parentIdx];
-              return (
-                <line key={`edge-${n.idx}`}
-                  x1={par.cx} y1={par.cy} x2={n.cx} y2={n.cy}
-                  stroke="#2a2a2a" strokeWidth={dN === 1 ? 1.8 : 1.1}
-                  style={{ pointerEvents: 'none' }}
-                />
-              );
-            })}
-
-            {/* ── Keyword dots — fixed positions, never recomputed ──────────── */}
-            {allNodes.map(n => {
-              const d = distances[n.idx] ?? 99;
-              if (d !== 1 || n.kwDots.length === 0) return null;
-              return n.kwDots.map((dot, li) => (
-                <g key={`kw-${n.idx}-${li}`}>
-                  <line x1={n.cx} y1={n.cy} x2={dot.x} y2={dot.y}
-                    stroke="#5a5a5a" strokeWidth={1.1} style={{ pointerEvents: 'none' }} />
-                  <circle cx={dot.x} cy={dot.y} r={LEAF_R}
-                    fill="#4a4a4a" stroke={STROKE} strokeWidth={0.8}
-                    style={{ pointerEvents: 'none' }} />
-                </g>
-              ));
-            })}
-
-            {/* ── Topic nodes ───────────────────────────────────────────────────
-                Stable DOM order (by idx) → CSS r + fill transitions fire correctly.
-                tailAngle is FIXED — never recomputed from camera, never snaps.
-                Color: dark grey for d>1, actual branch color for d≤1 (CSS fill transition). */}
-            {allNodes.map(n => {
-              const d = distances[n.idx] ?? 99;
-              const r = rForDist(d);
-              const isClickable = d > 0 && d <= 2;
-              const color = branchColor[n.idx] ?? '#e87878';
-              const nodeColor = d <= 1 ? color : '#5a5a5a';
-              const tailLen = d === 0 ? TAIL_LEN : TAIL_LEN * CHILD_TAIL_FACTOR;
-              // Label placed in direction away from parent (opposite of tail)
-              const labelAngle = n.tailAngle + Math.PI;
-
-              return (
-                <g
-                  key={`node-${n.idx}`}
-                  onClick={isClickable ? () => navigate(n.idx) : undefined}
-                  style={{
-                    cursor: isClickable ? 'pointer' : 'default',
-                    transform: 'translate(0,0)', // stacking context for zIndex
-                    zIndex: d === 0 ? 3 : d === 1 ? 2 : 1,
-                  }}
-                  className={d === 1 ? 'group' : ''}
-                >
-                  {d <= 1 && r > 0 && (
-                    <path
-                      d={tailPath(n.cx, n.cy, r, n.tailAngle, tailLen)}
-                      stroke={STROKE}
-                      strokeWidth={d === 0 ? 2 : 1.5} strokeLinejoin="round"
-                      style={{ fill: nodeColor, transition: `fill ${ANIM_MS}ms ease` }}
-                    />
-                  )}
-                  <circle
-                    cx={n.cx} cy={n.cy}
-                    r={Math.max(0, r)}
-                    stroke={STROKE}
-                    strokeWidth={d === 0 ? 2 : d === 1 ? 1.5 : 0.8}
-                    style={{
-                      fill: nodeColor,
-                      r: `${Math.max(0, r)}`,
-                      transition: `r ${ANIM_MS}ms ease, fill ${ANIM_MS}ms ease`,
-                    } as React.CSSProperties}
-                    className={d === 1 ? 'transition-[filter] group-hover:brightness-110' : ''}
-                  />
-                  {d === 0 && (
-                    <CenterLabel cx={n.cx} cy={n.cy} title={nodeMap[n.idx].title} scale={zoomScale} />
-                  )}
-                  {d === 1 && r > 0 && (
-                    <ChildLabel
-                      cx={n.cx} cy={n.cy}
-                      title={nodeMap[n.idx].title}
-                      angle={labelAngle}
-                      scale={zoomScale}
-                    />
-                  )}
-                </g>
-              );
-            })}
-          </g>
-        </svg>
-
-        {/* ── Breadcrumb ──────────────────────────────────────────────────────── */}
-        {history.length > 1 && (
-          <div className="text-xs text-[#555] mt-2">
-            {history.map((idx, i) => {
-              const label = nodeMap[idx]?.title ?? graphTitle;
-              return i === history.length - 1
-                ? <strong key={idx}>{label}</strong>
-                : (
-                  <span key={idx}>
-                    <span
-                      className="text-[#2a7ab5] underline cursor-pointer hover:text-[#1a5a8a]"
-                      onClick={() => navigate(idx)}
-                    >{label}</span>
-                    {' › '}
-                  </span>
-                );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── CenterLabel ────────────────────────────────────────────────────────────────
-// Font size divided by scale so text appears at constant screen size regardless of zoom.
-function CenterLabel({ cx, cy, title, scale }: { cx: number; cy: number; title: string; scale: number }) {
-  const lines = wrapWords(title, 11, 3);
-  const lineH = 15 / scale;
-  const midY = cy - CENTER_R * 0.15;
-  const startY = midY - ((lines.length - 1) * lineH) / 2;
-  return (
-    <text textAnchor="middle" fontSize={13 / scale} fontWeight={800} fill="#1a1a2e"
-      style={{ pointerEvents: 'none', userSelect: 'none' }}>
-      {lines.map((line, li) => (
-        <tspan key={li} x={cx} y={(startY + li * lineH + lineH * 0.36).toFixed(1)}>{line}</tspan>
-      ))}
-    </text>
-  );
-}
-
-// ── ChildLabel ─────────────────────────────────────────────────────────────────
-// All measurements divided by scale for constant screen size.
-// angle = direction away from parent (where label is placed).
-function ChildLabel({ cx, cy, title, angle, scale }: {
-  cx: number; cy: number; title: string; angle: number; scale: number;
+function Connection({
+  from,
+  to,
+  strokeWidth,
+  isClickable,
+  onClick,
+}: {
+  from: MV;
+  to: MV;
+  strokeWidth: number;
+  isClickable?: boolean;
+  onClick?: () => void;
 }) {
-  const lines = wrapWords(title, 10, 2);
-  const lineH = 14 / scale;
-  const padX = 7 / scale, padY = 4 / scale;
-  const charW = 6.6 / scale;
-  const boxW = Math.max(46 / scale, Math.max(...lines.map(l => l.length)) * charW + padX * 2);
-  const boxH = lines.length * lineH + padY * 2;
-  const cosA = Math.cos(angle), sinA = Math.sin(angle);
-  const proj = Math.abs(cosA) * boxW / 2 + Math.abs(sinA) * boxH / 2;
-  const dist = CHILD_R + 14 / scale + proj;
-  const bx = cx + cosA * dist;
-  const by = cy + sinA * dist;
-  const startY = by - ((lines.length - 1) * lineH) / 2;
   return (
-    <g style={{ pointerEvents: 'none', userSelect: 'none' }}>
-      <rect
-        x={(bx - boxW / 2).toFixed(1)} y={(by - boxH / 2).toFixed(1)}
-        width={boxW.toFixed(1)} height={boxH.toFixed(1)}
-        rx={5 / scale} ry={5 / scale}
-        fill="rgba(255,255,255,0.82)" stroke={STROKE} strokeWidth={0.8 / scale}
+    <>
+      <motion.line
+        x1={from.x}
+        y1={from.y}
+        x2={to.x}
+        y2={to.y}
+        stroke="#2f3640"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
       />
-      <text textAnchor="middle" fontSize={12 / scale} fontWeight={600} fill="#1a1a2e">
-        {lines.map((line, li) => (
-          <tspan key={li} x={bx.toFixed(1)} y={(startY + li * lineH + lineH * 0.36).toFixed(1)}>{line}</tspan>
-        ))}
-      </text>
-    </g>
+      {isClickable && (
+        <motion.line
+          x1={from.x}
+          y1={from.y}
+          x2={to.x}
+          y2={to.y}
+          stroke="transparent"
+          strokeWidth={Math.max(strokeWidth * 4, 14)}
+          strokeLinecap="round"
+          style={{ cursor: "pointer" }}
+          onClick={onClick}
+        />
+      )}
+    </>
+  );
+}
+
+const CHIP_CHILD_W = 150;
+const CHIP_CHILD_H = 22;
+const CHIP_SUPER_W = 220;
+const CHIP_SUPER_H = 24;
+
+function ChildChip({
+  label,
+  mv,
+  size,
+}: {
+  label: string;
+  mv: MV;
+  size: number;
+}) {
+  const offsetX = useTransform([mv.x, mv.y], (latest) => {
+    const [x, y] = latest as number[];
+    const len = Math.hypot(x, y);
+    if (len < 0.001) return -CHIP_CHILD_W / 2;
+    return (x / len) * (size + 14) - CHIP_CHILD_W / 2;
+  });
+  const offsetY = useTransform([mv.x, mv.y], (latest) => {
+    const [x, y] = latest as number[];
+    const len = Math.hypot(x, y);
+    if (len < 0.001) return -CHIP_CHILD_H / 2;
+    return (y / len) * (size + 14) - CHIP_CHILD_H / 2;
+  });
+
+  return (
+    <motion.foreignObject
+      x={offsetX}
+      y={offsetY}
+      width={CHIP_CHILD_W}
+      height={CHIP_CHILD_H}
+      style={{ pointerEvents: "none", overflow: "visible" }}
+    >
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "var(--font-sans)",
+        }}
+      >
+        <span
+          style={{
+            display: "inline-block",
+            padding: "2px 8px",
+            background: "rgba(255, 255, 255, 0.88)",
+            borderRadius: 6,
+            boxShadow: "0 1px 2px rgba(0, 0, 0, 0.06)",
+            border: "1px solid rgba(0, 0, 0, 0.04)",
+            fontSize: 11,
+            fontWeight: 500,
+            color: "#1f2937",
+            whiteSpace: "nowrap",
+            maxWidth: CHIP_CHILD_W - 4,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {label}
+        </span>
+      </div>
+    </motion.foreignObject>
+  );
+}
+
+function SuperChip({ label, mv }: { label: string; mv: MV }) {
+  const SUPER_ALONG = 260;
+  const SUPER_PERP = 22;
+
+  const x = useTransform([mv.x, mv.y], (latest) => {
+    const [sx, sy] = latest as number[];
+    const len = Math.hypot(sx, sy);
+    if (len < 0.001) return -CHIP_SUPER_W / 2;
+    const t = Math.min(1, SUPER_ALONG / len);
+    const perpX = -sy / len;
+    return sx * t + perpX * SUPER_PERP - CHIP_SUPER_W / 2;
+  });
+  const y = useTransform([mv.x, mv.y], (latest) => {
+    const [sx, sy] = latest as number[];
+    const len = Math.hypot(sx, sy);
+    if (len < 0.001) return -CHIP_SUPER_H / 2;
+    const t = Math.min(1, SUPER_ALONG / len);
+    const perpY = sx / len;
+    return sy * t + perpY * SUPER_PERP - CHIP_SUPER_H / 2;
+  });
+
+  return (
+    <motion.foreignObject
+      x={x}
+      y={y}
+      width={CHIP_SUPER_W}
+      height={CHIP_SUPER_H}
+      style={{ pointerEvents: "none", overflow: "visible" }}
+    >
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "var(--font-sans)",
+        }}
+      >
+        <span
+          style={{
+            display: "inline-block",
+            padding: "3px 10px",
+            background: "rgba(255, 255, 255, 0.92)",
+            borderRadius: 8,
+            boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)",
+            border: "1px solid rgba(0, 0, 0, 0.04)",
+            fontSize: 12,
+            fontWeight: 500,
+            color: "#1f2937",
+            whiteSpace: "nowrap",
+            maxWidth: CHIP_SUPER_W - 4,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {label}
+        </span>
+      </div>
+    </motion.foreignObject>
+  );
+}
+
+export default function KnowledgeGraph({
+  graph,
+  focusId,
+  onFocus,
+  onHover,
+}: {
+  graph: GraphData;
+  focusId: string;
+  onFocus: (id: string) => void;
+  onHover: (info: HoverInfo | null) => void;
+}) {
+  const focus = graph.nodes[focusId];
+  const focusPos = graph.positions[focusId];
+  const zoom = Math.pow(DEPTH_SCALE, focus.depth);
+
+  // One MotionValue pair per node, sourced from the graph (stable for the
+  // lifetime of the component). Lines and node groups both read from these,
+  // guaranteeing endpoints stay glued during transitions.
+  const motionPositions = useMemo(() => {
+    const map = new Map<string, MV>();
+    for (const id of Object.keys(graph.nodes)) {
+      const wp = graph.positions[id];
+      const sx = (wp.x - focusPos.x) * zoom;
+      const sy = (wp.y - focusPos.y) * zoom;
+      map.set(id, { x: motionValue(sx), y: motionValue(sy) });
+    }
+    return map;
+    // Intentional: re-init only if the graph identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph]);
+
+  useEffect(() => {
+    const controls: Array<{ stop: () => void }> = [];
+    for (const id of Object.keys(graph.nodes)) {
+      const wp = graph.positions[id];
+      const targetX = (wp.x - focusPos.x) * zoom;
+      const targetY = (wp.y - focusPos.y) * zoom;
+      const mv = motionPositions.get(id);
+      if (!mv) continue;
+      controls.push(animate(mv.x, targetX, TRANSITION));
+      controls.push(animate(mv.y, targetY, TRANSITION));
+    }
+    return () => {
+      controls.forEach((c) => c.stop());
+    };
+  }, [focusId, focusPos.x, focusPos.y, zoom, graph, motionPositions]);
+
+  // Role + tipAngle per node, recomputed when focus changes.
+  const renderInfo = useMemo(() => {
+    type Info = { role: Role; tipAngleDeg: number };
+    const info: Record<string, Info> = {};
+    for (const id of Object.keys(graph.nodes)) {
+      const node = graph.nodes[id];
+      const wp = graph.positions[id];
+      let tipRad: number;
+      if (node.parentId) {
+        const pp = graph.positions[node.parentId];
+        tipRad = Math.atan2(pp.y - wp.y, pp.x - wp.x);
+      } else {
+        tipRad = wp.superAngle;
+      }
+      info[id] = {
+        role: roleFor(id, focusId, graph),
+        tipAngleDeg: (tipRad * 180) / Math.PI,
+      };
+    }
+    return info;
+  }, [graph, focusId]);
+
+  type Conn = {
+    key: string;
+    fromId: string;
+    toId: string;
+    role: "super" | "child" | "grandchild";
+  };
+  const connections: Conn[] = [];
+  if (focus.parentId) {
+    connections.push({
+      key: `super:${focusId}->${focus.parentId}`,
+      fromId: focusId,
+      toId: focus.parentId,
+      role: "super",
+    });
+  }
+  for (const cid of focus.childIds) {
+    connections.push({
+      key: `child:${focusId}->${cid}`,
+      fromId: focusId,
+      toId: cid,
+      role: "child",
+    });
+    for (const gcid of graph.nodes[cid].childIds) {
+      connections.push({
+        key: `gc:${cid}->${gcid}`,
+        fromId: cid,
+        toId: gcid,
+        role: "grandchild",
+      });
+    }
+  }
+
+  return (
+    <svg
+      viewBox={`${-VIEW_W / 2} ${-VIEW_H / 2} ${VIEW_W} ${VIEW_H}`}
+      preserveAspectRatio="xMidYMid meet"
+      className="w-full h-full select-none"
+      overflow="hidden"
+      style={{ overflow: "hidden" }}
+      onMouseLeave={() => onHover(null)}
+    >
+      {connections.map((c) => {
+        const fromMV = motionPositions.get(c.fromId);
+        const toMV = motionPositions.get(c.toId);
+        if (!fromMV || !toMV) return null;
+        const sw =
+          c.role === "super"
+            ? STROKE_SUPER
+            : c.role === "child"
+            ? STROKE_CHILD
+            : STROKE_GRANDCHILD;
+        return (
+          <Connection
+            key={c.key}
+            from={fromMV}
+            to={toMV}
+            strokeWidth={sw}
+            isClickable={c.role === "super"}
+            onClick={c.role === "super" ? () => onFocus(c.toId) : undefined}
+          />
+        );
+      })}
+
+      {focus.parentId && motionPositions.get(focus.parentId) && (
+        <SuperChip
+          key={`superchip:${focus.parentId}`}
+          label={graph.nodes[focus.parentId].title}
+          mv={motionPositions.get(focus.parentId)!}
+        />
+      )}
+
+      {Object.entries(renderInfo).map(([id, info]) => {
+        const node = graph.nodes[id];
+        const role = info.role;
+        const size =
+          role === "focus"
+            ? SIZE_FOCUS
+            : role === "child"
+            ? SIZE_CHILD
+            : role === "grandchild"
+            ? SIZE_GRANDCHILD
+            : 0;
+        const visible =
+          role === "focus" || role === "child" || role === "grandchild";
+        const fill = role === "grandchild" ? "#3a3a3a" : node.color;
+        const mv = motionPositions.get(id);
+        if (!mv) return null;
+
+        return (
+          <motion.g
+            key={id}
+            initial={false}
+            style={{
+              x: mv.x,
+              y: mv.y,
+              pointerEvents: visible ? "auto" : "none",
+              cursor:
+                role === "child" || role === "grandchild"
+                  ? "pointer"
+                  : "default",
+            }}
+            animate={{ opacity: visible ? 1 : 0 }}
+            transition={TRANSITION}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (role === "child" || role === "grandchild") onFocus(id);
+            }}
+            onMouseEnter={(e) =>
+              visible && onHover({ id, clientX: e.clientX, clientY: e.clientY })
+            }
+            onMouseMove={(e) =>
+              visible && onHover({ id, clientX: e.clientX, clientY: e.clientY })
+            }
+            onMouseLeave={() => onHover(null)}
+          >
+            <motion.path
+              d={TEARDROP_UNIT}
+              initial={false}
+              animate={{
+                scale: size,
+                rotate: info.tipAngleDeg,
+                fill,
+              }}
+              transition={TRANSITION}
+              stroke="rgba(0, 0, 0, 0.18)"
+              strokeWidth={role === "grandchild" ? 0 : 0.04}
+              vectorEffect="non-scaling-stroke"
+            />
+
+            {role === "focus" && (
+              <foreignObject
+                x={-size + 6}
+                y={-size + 6}
+                width={2 * (size - 6)}
+                height={2 * (size - 6)}
+                style={{ pointerEvents: "none" }}
+              >
+                <div
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    textAlign: "center",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    lineHeight: 1.15,
+                    color: "#111827",
+                    padding: "0 4px",
+                    fontFamily: "var(--font-sans)",
+                  }}
+                >
+                  {node.title}
+                </div>
+              </foreignObject>
+            )}
+
+            {role === "child" && (
+              <ChildChip label={node.title} mv={mv} size={size} />
+            )}
+          </motion.g>
+        );
+      })}
+    </svg>
   );
 }

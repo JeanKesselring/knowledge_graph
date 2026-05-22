@@ -1,6 +1,9 @@
-import { KnowledgeGraph } from '@/components/KnowledgeGraph';
-import graphData from '@/data/graph.json';
+import topicsRaw from "@/data/topics.json";
+import { buildGraph } from "@/lib/graph";
+import type { RawTopics } from "@/lib/types";
+import KnowledgeGraphPage from "@/components/KnowledgeGraphPage";
 
 export default function Page() {
-  return <KnowledgeGraph data={graphData} />;
+  const graph = buildGraph(topicsRaw as unknown as RawTopics);
+  return <KnowledgeGraphPage graph={graph} />;
 }
