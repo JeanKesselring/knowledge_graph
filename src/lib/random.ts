@@ -20,17 +20,23 @@ export function seededRng(seed: string | number) {
   };
 }
 
-/** Pastel palette inspired by the reference (yellow, green, pink, orange, blue). */
-const PALETTE = [
-  "#FBE38E", // yellow
-  "#B8E3A4", // green
-  "#F6B3B6", // pink
-  "#F7B97A", // orange
-  "#A6CFEA", // blue
-  "#D9C7EF", // lavender
+export type NodeColor = { base: string; deep: string };
+
+/**
+ * Pastel palette paired with a saturated counterpart for the tail-tip stop
+ * of the teardrop gradient. The head reads as the pastel `base`; the tail
+ * pulls toward `deep`.
+ */
+const PALETTE: NodeColor[] = [
+  { base: "#FBE38E", deep: "#E0A800" }, // yellow
+  { base: "#B8E3A4", deep: "#2E7D32" }, // green
+  { base: "#F6B3B6", deep: "#D32F2F" }, // pink → red
+  { base: "#F7B97A", deep: "#E65100" }, // orange
+  { base: "#A6CFEA", deep: "#1565C0" }, // blue
+  { base: "#D9C7EF", deep: "#6A1B9A" }, // lavender
 ];
 
-export function colorForId(id: string): string {
+export function colorForId(id: string): NodeColor {
   const rng = seededRng(`color:${id}`);
   return PALETTE[Math.floor(rng() * PALETTE.length)];
 }

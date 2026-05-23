@@ -20,8 +20,9 @@ export type GraphNode = {
   childIds: string[];
   /** depth from root in the canonical tree */
   depth: number;
-  /** stable color seeded from id */
-  color: string;
+  /** stable color seeded from id; `base` is the head/uniform fill and `deep`
+   *  is the saturated color at the tail tip of the gradient */
+  color: { base: string; deep: string };
 };
 
 export type WorldPos = {

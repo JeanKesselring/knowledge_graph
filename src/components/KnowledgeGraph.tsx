@@ -15,9 +15,9 @@ import { teardropPath } from "@/lib/teardrop";
 const VIEW_W = 1100;
 const VIEW_H = 720;
 
-const SIZE_FOCUS = 60;
-const SIZE_CHILD = 20;
-const SIZE_GRANDCHILD = 3;
+const SIZE_FOCUS = 120;
+const SIZE_CHILD = 40;
+const SIZE_GRANDCHILD = 6;
 
 const STROKE_SUPER = 3;
 const STROKE_CHILD = 1.5;
@@ -91,31 +91,37 @@ function Connection({
   );
 }
 
-const CHIP_CHILD_W = 150;
-const CHIP_CHILD_H = 22;
-const CHIP_SUPER_W = 220;
-const CHIP_SUPER_H = 24;
+const CHIP_CHILD_W = 180;
+const CHIP_CHILD_H = 56;
+const CHIP_SUPER_W = 240;
+const CHIP_SUPER_H = 56;
 
 function ChildChip({
   label,
   mv,
   size,
+  id,
+  onClick,
+  onHover,
 }: {
   label: string;
   mv: MV;
   size: number;
+  id: string;
+  onClick: () => void;
+  onHover: (info: HoverInfo | null) => void;
 }) {
   const offsetX = useTransform([mv.x, mv.y], (latest) => {
     const [x, y] = latest as number[];
     const len = Math.hypot(x, y);
     if (len < 0.001) return -CHIP_CHILD_W / 2;
-    return (x / len) * (size + 14) - CHIP_CHILD_W / 2;
+    return (x / len) * (size + 28) - CHIP_CHILD_W / 2;
   });
   const offsetY = useTransform([mv.x, mv.y], (latest) => {
     const [x, y] = latest as number[];
     const len = Math.hypot(x, y);
     if (len < 0.001) return -CHIP_CHILD_H / 2;
-    return (y / len) * (size + 14) - CHIP_CHILD_H / 2;
+    return (y / len) * (size + 28) - CHIP_CHILD_H / 2;
   });
 
   return (
@@ -124,7 +130,18 @@ function ChildChip({
       y={offsetY}
       width={CHIP_CHILD_W}
       height={CHIP_CHILD_H}
-      style={{ pointerEvents: "none", overflow: "visible" }}
+      style={{ pointerEvents: "auto", overflow: "visible", cursor: "pointer" }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      onMouseEnter={(e) =>
+        onHover({ id, clientX: e.clientX, clientY: e.clientY })
+      }
+      onMouseMove={(e) =>
+        onHover({ id, clientX: e.clientX, clientY: e.clientY })
+      }
+      onMouseLeave={() => onHover(null)}
     >
       <div
         style={{
@@ -139,18 +156,19 @@ function ChildChip({
         <span
           style={{
             display: "inline-block",
-            padding: "2px 8px",
-            background: "rgba(255, 255, 255, 0.88)",
+            padding: "4px 8px",
+            background: "#ffffff",
             borderRadius: 6,
             boxShadow: "0 1px 2px rgba(0, 0, 0, 0.06)",
-            border: "1px solid rgba(0, 0, 0, 0.04)",
-            fontSize: 11,
+            border: "1.5px solid #4A4A4A",
+            fontSize: 13,
             fontWeight: 500,
+            lineHeight: 1.2,
             color: "#1f2937",
-            whiteSpace: "nowrap",
+            textAlign: "center",
+            whiteSpace: "normal",
+            wordBreak: "break-word",
             maxWidth: CHIP_CHILD_W - 4,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
           }}
         >
           {label}
@@ -160,7 +178,19 @@ function ChildChip({
   );
 }
 
-function SuperChip({ label, mv }: { label: string; mv: MV }) {
+function SuperChip({
+  label,
+  mv,
+  id,
+  onClick,
+  onHover,
+}: {
+  label: string;
+  mv: MV;
+  id: string;
+  onClick: () => void;
+  onHover: (info: HoverInfo | null) => void;
+}) {
   const SUPER_ALONG = 260;
   const SUPER_PERP = 22;
 
@@ -187,7 +217,18 @@ function SuperChip({ label, mv }: { label: string; mv: MV }) {
       y={y}
       width={CHIP_SUPER_W}
       height={CHIP_SUPER_H}
-      style={{ pointerEvents: "none", overflow: "visible" }}
+      style={{ pointerEvents: "auto", overflow: "visible", cursor: "pointer" }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      onMouseEnter={(e) =>
+        onHover({ id, clientX: e.clientX, clientY: e.clientY })
+      }
+      onMouseMove={(e) =>
+        onHover({ id, clientX: e.clientX, clientY: e.clientY })
+      }
+      onMouseLeave={() => onHover(null)}
     >
       <div
         style={{
@@ -202,18 +243,19 @@ function SuperChip({ label, mv }: { label: string; mv: MV }) {
         <span
           style={{
             display: "inline-block",
-            padding: "3px 10px",
-            background: "rgba(255, 255, 255, 0.92)",
-            borderRadius: 8,
-            boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)",
-            border: "1px solid rgba(0, 0, 0, 0.04)",
-            fontSize: 12,
+            padding: "4px 8px",
+            background: "#ffffff",
+            borderRadius: 6,
+            boxShadow: "0 1px 2px rgba(0, 0, 0, 0.06)",
+            border: "1.5px solid #4A4A4A",
+            fontSize: 13,
             fontWeight: 500,
+            lineHeight: 1.2,
             color: "#1f2937",
-            whiteSpace: "nowrap",
+            textAlign: "center",
+            whiteSpace: "normal",
+            wordBreak: "break-word",
             maxWidth: CHIP_SUPER_W - 4,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
           }}
         >
           {label}
@@ -333,6 +375,45 @@ export default function KnowledgeGraph({
       style={{ overflow: "hidden" }}
       onMouseLeave={() => onHover(null)}
     >
+      <defs>
+        {Object.entries(renderInfo).map(([id, info]) => {
+          const node = graph.nodes[id];
+          const isGrandchild = info.role === "grandchild";
+          const base = isGrandchild ? "#5a5a5a" : node.color.base;
+          const deep = isGrandchild ? "#1f1f1f" : node.color.deep;
+          return (
+            <linearGradient
+              key={`grad-${id}`}
+              id={`grad-${id}`}
+              gradientUnits="userSpaceOnUse"
+              x1={-1}
+              y1={0}
+              x2={1.5}
+              y2={0}
+            >
+              <motion.stop
+                offset={0}
+                initial={false}
+                animate={{ stopColor: base }}
+                transition={TRANSITION}
+              />
+              <motion.stop
+                offset={0.56}
+                initial={false}
+                animate={{ stopColor: base }}
+                transition={TRANSITION}
+              />
+              <motion.stop
+                offset={1}
+                initial={false}
+                animate={{ stopColor: deep }}
+                transition={TRANSITION}
+              />
+            </linearGradient>
+          );
+        })}
+      </defs>
+
       {connections.map((c) => {
         const fromMV = motionPositions.get(c.fromId);
         const toMV = motionPositions.get(c.toId);
@@ -360,6 +441,9 @@ export default function KnowledgeGraph({
           key={`superchip:${focus.parentId}`}
           label={graph.nodes[focus.parentId].title}
           mv={motionPositions.get(focus.parentId)!}
+          onClick={() => onFocus(focus.parentId!)}
+          onHover={onHover}
+          id={focus.parentId}
         />
       )}
 
@@ -376,7 +460,8 @@ export default function KnowledgeGraph({
             : 0;
         const visible =
           role === "focus" || role === "child" || role === "grandchild";
-        const fill = role === "grandchild" ? "#3a3a3a" : node.color;
+        const strokeW =
+          role === "grandchild" ? 0.5 : role === "focus" ? 4 : 1.5;
         const mv = motionPositions.get(id);
         if (!mv) return null;
 
@@ -413,18 +498,19 @@ export default function KnowledgeGraph({
               animate={{
                 scale: size,
                 rotate: info.tipAngleDeg,
-                fill,
               }}
               transition={TRANSITION}
-              stroke="rgba(0, 0, 0, 0.18)"
-              strokeWidth={role === "grandchild" ? 0 : 0.04}
+              fill={`url(#grad-${id})`}
+              stroke="#4A4A4A"
+              strokeWidth={strokeW}
+              strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
             />
 
             {role === "focus" && (
               <foreignObject
                 x={-size + 6}
-                y={-size + 6}
+                y={-size + 6 - Math.round(size * 0.04)}
                 width={2 * (size - 6)}
                 height={2 * (size - 6)}
                 style={{ pointerEvents: "none" }}
@@ -437,11 +523,11 @@ export default function KnowledgeGraph({
                     alignItems: "center",
                     justifyContent: "center",
                     textAlign: "center",
-                    fontSize: 11,
+                    fontSize: 16,
                     fontWeight: 600,
                     lineHeight: 1.15,
                     color: "#111827",
-                    padding: "0 4px",
+                    padding: "0 6px",
                     fontFamily: "var(--font-sans)",
                   }}
                 >
@@ -451,7 +537,14 @@ export default function KnowledgeGraph({
             )}
 
             {role === "child" && (
-              <ChildChip label={node.title} mv={mv} size={size} />
+              <ChildChip
+                label={node.title}
+                mv={mv}
+                size={size}
+                onClick={() => onFocus(id)}
+                onHover={onHover}
+                id={id}
+              />
             )}
           </motion.g>
         );
