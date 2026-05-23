@@ -10,7 +10,7 @@ export const DEPTH_SCALE = 3;
 /** Random angle jitter applied to each child, in radians. */
 const ANGLE_JITTER = (5 * Math.PI) / 180;
 /** Random distance variation factor (±). */
-const DISTANCE_JITTER = 0.25;
+const DISTANCE_JITTER = 0.125;
 
 export function buildGraph(raw: RawTopics): GraphData {
   const nodes: Record<string, GraphNode> = {};

@@ -33,6 +33,20 @@ const TRANSITION = {
 
 const TEARDROP_UNIT = teardropPath(1);
 
+/** Project (x, y) from origin to the viewport rectangle boundary, leaving margin px gap. */
+function projectToViewportEdge(
+  x: number,
+  y: number,
+  margin = 40,
+): [number, number] {
+  const len = Math.hypot(x, y);
+  if (len < 0.001) return [0, -(VIEW_H / 2 - margin)];
+  const tx = (VIEW_W / 2 - margin) / Math.abs(x);
+  const ty = (VIEW_H / 2 - margin) / Math.abs(y);
+  const t = Math.min(tx, ty);
+  return [x * t, y * t];
+}
+
 type Role = "focus" | "super" | "child" | "grandchild" | "hidden";
 type MV = {
   x: MotionValue<number>;
@@ -110,35 +124,24 @@ const CHIP_SUPER_H = 48;
 
 function ChildChip({
   label,
-  mv,
-  size,
+  labelAngleDeg,
   id,
   onClick,
   onHover,
 }: {
   label: string;
-  mv: MV;
-  size: number;
+  labelAngleDeg: number;
   id: string;
   onClick: () => void;
   onHover: (info: HoverInfo | null) => void;
 }) {
-  const offsetX = useTransform([mv.x, mv.y], (latest) => {
-    const [x, y] = latest as number[];
-    const len = Math.hypot(x, y);
-    if (len < 0.001) return -CHIP_CHILD_W / 2;
-    // CCW perpendicular to the focus->node radial (SVG y-down): (-y/r, x/r)
-    return (-y / len) * (size + 80) - CHIP_CHILD_W / 2;
-  });
-  const offsetY = useTransform([mv.x, mv.y], (latest) => {
-    const [x, y] = latest as number[];
-    const len = Math.hypot(x, y);
-    if (len < 0.001) return -CHIP_CHILD_H / 2;
-    return (x / len) * (size + 80) - CHIP_CHILD_H / 2;
-  });
+  const angleRad = (labelAngleDeg * Math.PI) / 180;
+  const baseDist = SIZE_CHILD + 80;
+  const offsetX = Math.cos(angleRad) * (baseDist + 20) - CHIP_CHILD_W / 2;
+  const offsetY = Math.sin(angleRad) * baseDist - CHIP_CHILD_H / 2;
 
   return (
-    <motion.foreignObject
+    <foreignObject
       x={offsetX}
       y={offsetY}
       width={CHIP_CHILD_W}
@@ -187,7 +190,7 @@ function ChildChip({
           {label}
         </span>
       </div>
-    </motion.foreignObject>
+    </foreignObject>
   );
 }
 
@@ -354,8 +357,11 @@ export default function KnowledgeGraph({
     const map = new Map<string, MV>();
     for (const id of Object.keys(graph.nodes)) {
       const wp = graph.positions[id];
-      const sx = (wp.x - focusPos.x) * zoom;
-      const sy = (wp.y - focusPos.y) * zoom;
+      let sx = (wp.x - focusPos.x) * zoom;
+      let sy = (wp.y - focusPos.y) * zoom;
+      if (id === focus.parentId) {
+        [sx, sy] = projectToViewportEdge(sx, sy);
+      }
       const initialRole = roleFor(id, focusId, graph);
       map.set(id, {
         x: motionValue(sx),
@@ -372,8 +378,11 @@ export default function KnowledgeGraph({
     const controls: Array<{ stop: () => void }> = [];
     for (const id of Object.keys(graph.nodes)) {
       const wp = graph.positions[id];
-      const targetX = (wp.x - focusPos.x) * zoom;
-      const targetY = (wp.y - focusPos.y) * zoom;
+      let targetX = (wp.x - focusPos.x) * zoom;
+      let targetY = (wp.y - focusPos.y) * zoom;
+      if (id === focus.parentId) {
+        [targetX, targetY] = projectToViewportEdge(targetX, targetY);
+      }
       const targetSize = sizeForRole(roleFor(id, focusId, graph));
       const mv = motionPositions.get(id);
       if (!mv) continue;
@@ -407,6 +416,73 @@ export default function KnowledgeGraph({
     }
     return info;
   }, [graph, focusId]);
+
+  // Label angle for each child node: prefer left/right, avoid parent edge and grandchildren.
+  const labelAngleDeg = useMemo<Record<string, number>>(() => {
+    const result: Record<string, number> = {};
+    for (const childId of focus.childIds) {
+      const childWP = graph.positions[childId];
+      const grandchildIds = graph.nodes[childId].childIds;
+
+      // Preferred direction: 0 for right, π for left, based on child position relative to focus
+      const preferredAngle = childWP.x > focusPos.x ? 0 : Math.PI;
+
+      if (grandchildIds.length === 0) {
+        result[childId] = (preferredAngle * 180) / Math.PI;
+        continue;
+      }
+
+      // Angle from child back to parent (where the connecting edge comes from)
+      const parentAngle = Math.atan2(
+        focusPos.y - childWP.y,
+        focusPos.x - childWP.x,
+      );
+
+      // Angles of all grandchildren, sorted
+      const angles = grandchildIds
+        .map((gcId) => {
+          const gc = graph.positions[gcId];
+          return Math.atan2(gc.y - childWP.y, gc.x - childWP.x);
+        })
+        .sort((a, b) => a - b);
+
+      // Find all gaps, excluding the one containing the parent edge
+      const gaps: { midAngle: number }[] = [];
+      for (let i = 0; i < angles.length; i++) {
+        const curr = angles[i];
+        const next = angles[(i + 1) % angles.length];
+        const gapSize = (next - curr + 2 * Math.PI) % (2 * Math.PI);
+        const midAngle = curr + gapSize / 2;
+
+        // Check if parent edge is in this gap
+        const parentInGap =
+          (parentAngle - curr + 2 * Math.PI) % (2 * Math.PI) < gapSize;
+
+        if (!parentInGap) {
+          gaps.push({ midAngle });
+        }
+      }
+
+      // Find gap closest to preferred direction
+      let bestAngle = preferredAngle;
+      if (gaps.length > 0) {
+        let minDistance = Math.PI;
+        for (const gap of gaps) {
+          // Angular distance (shortest path around circle)
+          let dist = Math.abs(gap.midAngle - preferredAngle);
+          if (dist > Math.PI) dist = 2 * Math.PI - dist;
+
+          if (dist < minDistance) {
+            minDistance = dist;
+            bestAngle = gap.midAngle;
+          }
+        }
+      }
+
+      result[childId] = (bestAngle * 180) / Math.PI;
+    }
+    return result;
+  }, [focusId, graph]);
 
   type Conn = {
     key: string;
@@ -567,8 +643,7 @@ export default function KnowledgeGraph({
             {role === "child" && (
               <ChildChip
                 label={node.title}
-                mv={mv}
-                size={size}
+                labelAngleDeg={labelAngleDeg[id] ?? 0}
                 onClick={() => onFocus(id)}
                 onHover={onHover}
                 id={id}
