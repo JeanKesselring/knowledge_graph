@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   animate,
   motion,
   motionValue,
+  useMotionValueEvent,
   useTransform,
   type MotionValue,
 } from "framer-motion";
@@ -15,7 +16,7 @@ import { teardropPath } from "@/lib/teardrop";
 const VIEW_W = 1100;
 const VIEW_H = 720;
 
-const SIZE_FOCUS = 120;
+const SIZE_FOCUS = 96;
 const SIZE_CHILD = 40;
 const SIZE_GRANDCHILD = 6;
 
@@ -33,7 +34,18 @@ const TRANSITION = {
 const TEARDROP_UNIT = teardropPath(1);
 
 type Role = "focus" | "super" | "child" | "grandchild" | "hidden";
-type MV = { x: MotionValue<number>; y: MotionValue<number> };
+type MV = {
+  x: MotionValue<number>;
+  y: MotionValue<number>;
+  size: MotionValue<number>;
+};
+
+function sizeForRole(role: Role): number {
+  if (role === "focus") return SIZE_FOCUS;
+  if (role === "child") return SIZE_CHILD;
+  if (role === "grandchild") return SIZE_GRANDCHILD;
+  return 0;
+}
 
 function roleFor(nodeId: string, focusId: string, graph: GraphData): Role {
   if (nodeId === focusId) return "focus";
@@ -91,10 +103,10 @@ function Connection({
   );
 }
 
-const CHIP_CHILD_W = 180;
-const CHIP_CHILD_H = 56;
-const CHIP_SUPER_W = 240;
-const CHIP_SUPER_H = 56;
+const CHIP_CHILD_W = 140;
+const CHIP_CHILD_H = 48;
+const CHIP_SUPER_W = 200;
+const CHIP_SUPER_H = 48;
 
 function ChildChip({
   label,
@@ -115,13 +127,14 @@ function ChildChip({
     const [x, y] = latest as number[];
     const len = Math.hypot(x, y);
     if (len < 0.001) return -CHIP_CHILD_W / 2;
-    return (x / len) * (size + 28) - CHIP_CHILD_W / 2;
+    // CCW perpendicular to the focus->node radial (SVG y-down): (-y/r, x/r)
+    return (-y / len) * (size + 80) - CHIP_CHILD_W / 2;
   });
   const offsetY = useTransform([mv.x, mv.y], (latest) => {
     const [x, y] = latest as number[];
     const len = Math.hypot(x, y);
     if (len < 0.001) return -CHIP_CHILD_H / 2;
-    return (y / len) * (size + 28) - CHIP_CHILD_H / 2;
+    return (x / len) * (size + 80) - CHIP_CHILD_H / 2;
   });
 
   return (
@@ -192,7 +205,7 @@ function SuperChip({
   onHover: (info: HoverInfo | null) => void;
 }) {
   const SUPER_ALONG = 260;
-  const SUPER_PERP = 22;
+  const SUPER_PERP = 110;
 
   const x = useTransform([mv.x, mv.y], (latest) => {
     const [sx, sy] = latest as number[];
@@ -265,6 +278,60 @@ function SuperChip({
   );
 }
 
+/**
+ * Renders the teardrop path with the SVG `transform` attribute set
+ * imperatively from the size motion value. The angle is static per node
+ * (pure world geometry, doesn't depend on focus). Using the SVG
+ * `transform` attribute — not CSS transform — means `rotate(...)` and
+ * `scale(...)` pivot at (0, 0) of the parent's user space *unambiguously*,
+ * regardless of `transform-box` or `transform-origin` interpretation.
+ * The path's local (0, 0) is the head center, so the head stays exactly at
+ * the parent's (0, 0), where the connection lines also land.
+ */
+function NodeShape({
+  angle,
+  sizeMV,
+  fill,
+  strokeW,
+}: {
+  angle: number;
+  sizeMV: MotionValue<number>;
+  fill: string;
+  strokeW: number;
+}) {
+  const gRef = useRef<SVGGElement>(null);
+
+  useMotionValueEvent(sizeMV, "change", (s) => {
+    if (gRef.current) {
+      gRef.current.setAttribute("transform", `rotate(${angle}) scale(${s})`);
+    }
+  });
+
+  useLayoutEffect(() => {
+    if (gRef.current) {
+      gRef.current.setAttribute(
+        "transform",
+        `rotate(${angle}) scale(${sizeMV.get()})`,
+      );
+    }
+  }, [angle, sizeMV]);
+
+  return (
+    <g ref={gRef}>
+      <motion.path
+        d={TEARDROP_UNIT}
+        initial={false}
+        animate={{ fill }}
+        transition={TRANSITION}
+        stroke="#4A4A4A"
+        strokeWidth={strokeW}
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </g>
+  );
+}
+
 export default function KnowledgeGraph({
   graph,
   focusId,
@@ -289,7 +356,12 @@ export default function KnowledgeGraph({
       const wp = graph.positions[id];
       const sx = (wp.x - focusPos.x) * zoom;
       const sy = (wp.y - focusPos.y) * zoom;
-      map.set(id, { x: motionValue(sx), y: motionValue(sy) });
+      const initialRole = roleFor(id, focusId, graph);
+      map.set(id, {
+        x: motionValue(sx),
+        y: motionValue(sy),
+        size: motionValue(sizeForRole(initialRole)),
+      });
     }
     return map;
     // Intentional: re-init only if the graph identity changes.
@@ -302,10 +374,12 @@ export default function KnowledgeGraph({
       const wp = graph.positions[id];
       const targetX = (wp.x - focusPos.x) * zoom;
       const targetY = (wp.y - focusPos.y) * zoom;
+      const targetSize = sizeForRole(roleFor(id, focusId, graph));
       const mv = motionPositions.get(id);
       if (!mv) continue;
       controls.push(animate(mv.x, targetX, TRANSITION));
       controls.push(animate(mv.y, targetY, TRANSITION));
+      controls.push(animate(mv.size, targetSize, TRANSITION));
     }
     return () => {
       controls.forEach((c) => c.stop());
@@ -375,45 +449,6 @@ export default function KnowledgeGraph({
       style={{ overflow: "hidden" }}
       onMouseLeave={() => onHover(null)}
     >
-      <defs>
-        {Object.entries(renderInfo).map(([id, info]) => {
-          const node = graph.nodes[id];
-          const isGrandchild = info.role === "grandchild";
-          const base = isGrandchild ? "#5a5a5a" : node.color.base;
-          const deep = isGrandchild ? "#1f1f1f" : node.color.deep;
-          return (
-            <linearGradient
-              key={`grad-${id}`}
-              id={`grad-${id}`}
-              gradientUnits="userSpaceOnUse"
-              x1={-1}
-              y1={0}
-              x2={1.5}
-              y2={0}
-            >
-              <motion.stop
-                offset={0}
-                initial={false}
-                animate={{ stopColor: base }}
-                transition={TRANSITION}
-              />
-              <motion.stop
-                offset={0.56}
-                initial={false}
-                animate={{ stopColor: base }}
-                transition={TRANSITION}
-              />
-              <motion.stop
-                offset={1}
-                initial={false}
-                animate={{ stopColor: deep }}
-                transition={TRANSITION}
-              />
-            </linearGradient>
-          );
-        })}
-      </defs>
-
       {connections.map((c) => {
         const fromMV = motionPositions.get(c.fromId);
         const toMV = motionPositions.get(c.toId);
@@ -462,6 +497,7 @@ export default function KnowledgeGraph({
           role === "focus" || role === "child" || role === "grandchild";
         const strokeW =
           role === "grandchild" ? 0.5 : role === "focus" ? 4 : 1.5;
+        const fill = role === "grandchild" ? "#3a3a3a" : node.color.base;
         const mv = motionPositions.get(id);
         if (!mv) return null;
 
@@ -492,25 +528,17 @@ export default function KnowledgeGraph({
             }
             onMouseLeave={() => onHover(null)}
           >
-            <motion.path
-              d={TEARDROP_UNIT}
-              initial={false}
-              animate={{
-                scale: size,
-                rotate: info.tipAngleDeg,
-              }}
-              transition={TRANSITION}
-              fill={`url(#grad-${id})`}
-              stroke="#4A4A4A"
-              strokeWidth={strokeW}
-              strokeLinejoin="round"
-              vectorEffect="non-scaling-stroke"
+            <NodeShape
+              angle={info.tipAngleDeg}
+              sizeMV={mv.size}
+              fill={fill}
+              strokeW={strokeW}
             />
 
             {role === "focus" && (
               <foreignObject
                 x={-size + 6}
-                y={-size + 6 - Math.round(size * 0.04)}
+                y={-size + 6}
                 width={2 * (size - 6)}
                 height={2 * (size - 6)}
                 style={{ pointerEvents: "none" }}
